@@ -151,14 +151,8 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
         add_val(handshake_sig, sig, sig_size);
         add_tlv(server_hello, handshake_sig);
 
-        derive_secret();
-        uint8_t salt[NONCE_SIZE * 2];
-        memcpy(salt, client_nonce, NONCE_SIZE);              // first 32 bytes
-        memcpy(salt + NONCE_SIZE, server_nonce, NONCE_SIZE); // last 32 bytes
-        derive_keys(salt, sizeof(salt));
-
         uint16_t len = serialize_tlv(out_buf, server_hello);
-        state_sec = DATA_STATE;
+        state_sec = CLIENT_SERVER_HELLO_AWAIT;
         return (ssize_t)len;
     }
     case DATA_STATE:
@@ -170,7 +164,6 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
         return (ssize_t)0;
     }
     default:
-        // TODO: handle unexpected states.
         return (ssize_t)0;
     }
 }
