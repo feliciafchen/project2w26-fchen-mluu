@@ -63,7 +63,6 @@ void init_sec(int initial_state, char *peer_host, bool bad_mac)
     else
     {
         load_certificate("server_cert.bin");
-        load_private_key("server_key.bin");
         generate_private_key();
         derive_public_key();
     }
@@ -76,8 +75,6 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
     case CLIENT_CLIENT_HELLO_SEND:
     {
         print("SEND CLIENT HELLO");
-        UNUSED(out_buf);
-        UNUSED(out_cap);
         // TODO: build CLIENT_HELLO with VERSION_TAG, NONCE, and PUBLIC_KEY TLVs.
         // Save client nonce for later key derivation and advance to CLIENT_SERVER_HELLO_AWAIT.
         client_hello = create_tlv(CLIENT_HELLO);
@@ -104,11 +101,65 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
     case SERVER_SERVER_HELLO_SEND:
     {
         print("SEND SERVER HELLO");
-        UNUSED(out_buf);
-        UNUSED(out_cap);
         // TODO: build SERVER_HELLO with NONCE, CERTIFICATE, PUBLIC_KEY, HANDSHAKE_SIGNATURE.
         // Sign the expected handshake transcript, derive session keys, then enter DATA_STATE.
-        return (ssize_t)0;
+        server_hello = create_tlv(SERVER_HELLO);
+
+        tlv *nonce = create_tlv(NONCE);
+        generate_nonce(server_nonce, NONCE_SIZE);
+        add_val(nonce, server_nonce, NONCE_SIZE);
+        add_tlv(server_hello, nonce);
+
+        tlv *cert = create_tlv(CERTIFICATE);
+        add_val(cert, certificate, cert_size);
+        add_tlv(server_hello, cert);
+
+        tlv *pub_key = create_tlv(PUBLIC_KEY);
+        add_val(pub_key, public_key, pub_key_size);
+        add_tlv(server_hello, pub_key);
+
+        /*
+        from implementation guide:
+
+        "You must verify the signature over the Serialized TLVs.
+        Create a temporary buffer, serialize the Client Hello TLV,
+        then append the serialized Server Nonce TLV,
+        then the serialized Ephemeral Key TLV.
+        Sign this combined buffer."
+        */
+        tlv *handshake_sig = create_tlv(HANDSHAKE_SIGNATURE);
+        uint8_t sig_data[512];
+        uint16_t offset = 0;
+        offset += serialize_tlv(sig_data + offset, client_hello);
+        offset += serialize_tlv(sig_data + offset, nonce);
+        offset += serialize_tlv(sig_data + offset, pub_key);
+
+        /*
+        tip from implementation guide:
+        "The Server needs to switch between keys.
+        It normally uses its Ephemeral Key (for deriving secrets),
+        but temporarily needs its Identity Key (from server_key.bin) to sign the handshake.
+        Use get_private_key() and set_private_key() to save/restore the ephemeral key
+        before/after loading the identity key."
+        */
+        EVP_PKEY *ephemeral = get_private_key();
+        load_private_key("server_key.bin");
+        uint8_t sig[256];
+        size_t sig_size = sign(sig, sig_data, offset);
+        set_private_key(ephemeral);
+
+        add_val(handshake_sig, sig, sig_size);
+        add_tlv(server_hello, handshake_sig);
+
+        derive_secret();
+        uint8_t salt[NONCE_SIZE * 2];
+        memcpy(salt, client_nonce, NONCE_SIZE);              // first 32 bytes
+        memcpy(salt + NONCE_SIZE, server_nonce, NONCE_SIZE); // last 32 bytes
+        derive_keys(salt, sizeof(salt));
+
+        uint16_t len = serialize_tlv(out_buf, server_hello);
+        state_sec = DATA_STATE;
+        return (ssize_t)len;
     }
     case DATA_STATE:
     {
@@ -131,10 +182,27 @@ void output_sec(uint8_t *in_buf, size_t in_len)
     case SERVER_CLIENT_HELLO_AWAIT:
     {
         print("RECV CLIENT HELLO");
-        UNUSED(in_buf);
-        UNUSED(in_len);
         // TODO: parse CLIENT_HELLO, validate required fields and protocol version.
         // Load peer ephemeral key, store client nonce, and transition to SERVER_SERVER_HELLO_SEND.
+        client_hello = deserialize_tlv(in_buf, in_len);
+        if (!client_hello)
+            exit(6);
+
+        tlv *version = get_tlv(client_hello, VERSION_TAG);
+        if (!version || version->length != 1 || version->val[0] != PROTOCOL_VERSION)
+            exit(6);
+
+        tlv *nonce = get_tlv(client_hello, NONCE);
+        if (!nonce || nonce->length != NONCE_SIZE)
+            exit(6);
+        memcpy(client_nonce, nonce->val, NONCE_SIZE);
+
+        tlv *peer_key = get_tlv(client_hello, PUBLIC_KEY);
+        if (!peer_key)
+            exit(6);
+        load_peer_public_key(peer_key->val, peer_key->length);
+
+        state_sec = SERVER_SERVER_HELLO_SEND;
         break;
     }
     case CLIENT_SERVER_HELLO_AWAIT:
