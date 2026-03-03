@@ -20,28 +20,45 @@ static uint8_t server_nonce[NONCE_SIZE];
 
 static uint64_t read_be_uint(const uint8_t *bytes, size_t nbytes)
 {
-    UNUSED(bytes);
-    UNUSED(nbytes);
     // TODO: parse an unsigned integer from a big-endian byte sequence.
     // Hint: this is used for certificate lifetime fields.
-    return 0;
+    uint64_t result = 0;
+    for (size_t i = 0; i < nbytes; i++)
+    {
+        result = (result << 8) | bytes[i];
+    }
+    return result;
 }
 
 static bool parse_lifetime_window(const tlv *life, uint64_t *start_ts, uint64_t *end_ts)
 {
-    UNUSED(life);
-    UNUSED(start_ts);
-    UNUSED(end_ts);
     // TODO: decode [not_before || not_after] from CERTIFICATE/LIFETIME.
     // Return false on malformed input (NULL pointers, wrong length, invalid range).
-    return false;
+    if (!life || !start_ts || !end_ts)
+        return false;
+    if (life->length != 16 || life->val == NULL)
+        return false;
+
+    *start_ts = read_be_uint(life->val, 8);
+    *end_ts = read_be_uint(life->val + 8, 8);
+
+    if (*start_ts >= *end_ts)
+        return false;
+
+    return true;
 }
 
 static void enforce_lifetime_valid(const tlv *life)
 {
-    UNUSED(life);
     // TODO: enforce lifetime validity against current time.
     // Exit with code 1 for invalid/expired cert, code 6 for malformed time inputs.
+    uint64_t not_before, not_after;
+    if (!parse_lifetime_window(life, &not_before, &not_after))
+        exit(6);
+
+    uint64_t now = (uint64_t)time(NULL);
+    if (now < not_before || now > not_after)
+        exit(1);
 }
 
 void init_sec(int initial_state, char *peer_host, bool bad_mac)
@@ -201,8 +218,6 @@ void output_sec(uint8_t *in_buf, size_t in_len)
     case CLIENT_SERVER_HELLO_AWAIT:
     {
         print("RECV SERVER HELLO");
-        UNUSED(in_buf);
-        UNUSED(in_len);
         // TODO: parse SERVER_HELLO and verify certificate chain/lifetime/hostname.
         // Verify handshake signature, load server ephemeral key, derive keys, enter DATA_STATE.
         // Required exit codes: bad cert(1), bad identity(2), bad handshake sig(3), malformed(6).
