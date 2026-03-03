@@ -291,6 +291,11 @@ void output_sec(uint8_t *in_buf, size_t in_len)
         // Lifetime validation
         enforce_lifetime_valid(lifetime);
 
+        // Check 2: DNS name match
+        if (hostname == NULL || dns->length != strlen(hostname) || memcmp(dns->val, hostname, dns->length) != 0){
+            exit(2);
+        }
+
         // handshake validation
         uint8_t hs_data[512];
         uint16_t hs_data_len = 0;
