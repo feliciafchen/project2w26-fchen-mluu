@@ -330,6 +330,13 @@ void output_sec(uint8_t *in_buf, size_t in_len)
             exit(3);
         }
 
+        derive_secret();
+        uint8_t salt[64];
+        memcpy(salt, client_nonce, NONCE_SIZE);
+        memcpy(salt + NONCE_SIZE, s_nonce->val, NONCE_SIZE);
+        derive_keys(salt, sizeof(salt));
+
+        state_sec = DATA_STATE;
         break;
     }
     case DATA_STATE:
