@@ -206,6 +206,65 @@ void output_sec(uint8_t *in_buf, size_t in_len)
         // TODO: parse SERVER_HELLO and verify certificate chain/lifetime/hostname.
         // Verify handshake signature, load server ephemeral key, derive keys, enter DATA_STATE.
         // Required exit codes: bad cert(1), bad identity(2), bad handshake sig(3), malformed(6).
+        server_hello = deserialize_tlv(in_buf, in_len);
+        if (!server_hello) {
+            exit(6);
+        }
+        // Parse server hello
+        tlv *nonce = get_tlv(server_hello, NONCE);
+        if (!nonce) {
+            exit(6);
+        }
+
+        tlv *cert = get_tlv(server_hello, CERTIFICATE);
+        if (!cert) {
+            exit(6);
+        }
+
+        tlv *pub_key = get_tlv(server_hello, PUBLIC_KEY);
+        if (!pub_key) {
+            exit(6);
+        }
+        load_peer_public_key(pub_key->val, pub_key->length);
+
+        tlv *handshake_sig = get_tlv(server_hello, HANDSHAKE_SIGNATURE);
+        if (!handshake_sig) {
+            exit(6);
+        }
+        
+        // Check 1: Certificate Validity
+        // Parse Cert and save in cert_data
+        uint8_t cert_data[512];
+        uint16_t data_len = 0;
+
+        tlv* dns = get_tlv(cert, DNS_NAME);
+        if (!dns){
+            exit(6);
+        }
+        data_len += serialize_tlv(cert_data + data_len, dns);
+        
+        tlv* cert_pub_key = get_tlv(cert, PUBLIC_KEY);
+        if (!cert_pub_key){
+            exit(6);
+        }
+        data_len += serialize_tlv(cert_data + data_len, cert_pub_key);
+
+        tlv* lifetime = get_tlv(cert, LIFETIME);
+        if (!lifetime){
+            exit(6);
+        }
+        data_len += serialize_tlv(cert_data + data_len, lifetime);
+
+        tlv* cert_sig = get_tlv(cert, SIGNATURE);
+        if (!cert_sig){
+            exit(6);
+        }
+        
+        if(!verify(cert_sig->val, cert_sig->length, cert_data, data_len, ec_ca_public_key)){
+            exit(1);
+        }
+        // Lifetime validation
+
         break;
     }
     case DATA_STATE:
