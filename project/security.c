@@ -145,7 +145,7 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
         Sign this combined buffer."
         */
         tlv *handshake_sig = create_tlv(HANDSHAKE_SIGNATURE);
-        uint8_t sig_data[512];
+        uint8_t sig_data[2048];
         uint16_t offset = 0;
         offset += serialize_tlv(sig_data + offset, client_hello);
         offset += serialize_tlv(sig_data + offset, nonce);
@@ -168,17 +168,64 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
         add_val(handshake_sig, sig, sig_size);
         add_tlv(server_hello, handshake_sig);
 
+        derive_secret();
+        uint8_t salt[64];
+        memcpy(salt, client_nonce, NONCE_SIZE);
+        memcpy(salt + NONCE_SIZE, server_nonce, NONCE_SIZE);
+        derive_keys(salt, sizeof(salt));
+
         uint16_t len = serialize_tlv(out_buf, server_hello);
-        state_sec = CLIENT_SERVER_HELLO_AWAIT;
+        state_sec = DATA_STATE;
         return (ssize_t)len;
     }
     case DATA_STATE:
     {
-        UNUSED(out_buf);
-        UNUSED(out_cap);
         // TODO: read plaintext from stdin, encrypt it, compute MAC, serialize DATA TLV.
         // If `inc_mac` is true, intentionally corrupt the MAC for testing.
-        return (ssize_t)0;
+        // Sending Data
+        ssize_t input_len = input_io(out_buf, out_cap);
+        if (input_len < 0)
+        {
+            exit(1);
+        }
+
+        // Create data tlv fields
+        uint8_t iv_buf[IV_SIZE];
+        uint8_t mac[MAC_SIZE];
+        uint8_t cipher_buf[2048];
+        
+        // Encrypt
+        size_t cipher_len = encrypt_data(iv_buf, cipher_buf, out_buf, (size_t)input_len);
+
+        tlv *iv_tlv = create_tlv(IV);
+        add_val(iv_tlv, iv_buf, IV_SIZE);
+        tlv *cipher_tlv = create_tlv(CIPHERTEXT);
+        add_val(cipher_tlv, cipher_buf, cipher_len);
+        tlv *mac_tlv = create_tlv(MAC);
+
+        // Serialize data and MAC
+        uint8_t data[2048];
+        uint16_t data_len = 0;
+        data_len += serialize_tlv(data + data_len, iv_tlv);
+        data_len += serialize_tlv(data + data_len, cipher_tlv);
+
+        hmac(mac, data, data_len);
+        
+        // If inc_mac is true, intentionally corrupt the MAC for testing
+        if (inc_mac)
+        {
+            mac[0] ^= 0xFF;
+        }
+        
+        add_val(mac_tlv, mac, MAC_SIZE);
+
+        tlv *data_tlv = create_tlv(DATA);
+        add_tlv(data_tlv, iv_tlv);
+        add_tlv(data_tlv, cipher_tlv);
+        add_tlv(data_tlv, mac_tlv);
+
+        uint16_t len = serialize_tlv(out_buf, data_tlv);
+        return (ssize_t)len;
     }
     default:
         return (ssize_t)0;
@@ -254,7 +301,7 @@ void output_sec(uint8_t *in_buf, size_t in_len)
 
         // Check 1: Certificate Validity
         // Parse Cert and save in cert_data
-        uint8_t cert_data[512];
+        uint8_t cert_data[2048];
         uint16_t data_len = 0;
 
         tlv *dns = get_tlv(cert, DNS_NAME);
@@ -297,7 +344,7 @@ void output_sec(uint8_t *in_buf, size_t in_len)
         }
 
         // handshake validation
-        uint8_t hs_data[512];
+        uint8_t hs_data[2048];
         uint16_t hs_data_len = 0;
         hs_data_len += serialize_tlv(hs_data + hs_data_len, client_hello);
 
@@ -341,10 +388,48 @@ void output_sec(uint8_t *in_buf, size_t in_len)
     }
     case DATA_STATE:
     {
-        UNUSED(in_buf);
-        UNUSED(in_len);
         // TODO: parse DATA, verify MAC before decrypting, then output plaintext.
         // Required exit code: bad MAC(5), malformed(6).
+        tlv *data_tlv = deserialize_tlv(in_buf, in_len);
+        if(!data_tlv){
+            exit(6);
+        }
+
+        tlv *iv = get_tlv(data_tlv, IV);
+        if (!iv)
+        {
+            exit(6);
+        }
+
+        tlv *cipher = get_tlv(data_tlv, CIPHERTEXT);
+        if (!cipher)
+        {
+            exit(6);
+        }
+
+        tlv *mac = get_tlv(data_tlv, MAC);
+        if (!mac)
+        {
+            exit(6);
+        }
+
+        uint8_t computed_mac[MAC_SIZE];
+        uint8_t data[2048];
+        uint16_t data_len = 0;
+        data_len += serialize_tlv(data + data_len, iv);
+        data_len += serialize_tlv(data + data_len, cipher);
+
+        hmac(computed_mac, data, data_len);
+
+        if (memcmp(computed_mac, mac->val, MAC_SIZE) != 0)
+        {
+            exit(5);
+        }
+
+        uint8_t output[2048];
+        size_t output_len = decrypt_cipher(output, cipher->val, cipher->length, iv->val);
+
+        output_io(output, output_len);
         break;
     }
     default:
