@@ -193,7 +193,7 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
         uint8_t iv_buf[IV_SIZE];
         uint8_t mac[MAC_SIZE];
         uint8_t cipher_buf[2048];
-        
+
         // Encrypt
         size_t cipher_len = encrypt_data(iv_buf, cipher_buf, out_buf, (size_t)input_len);
 
@@ -210,13 +210,13 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
         data_len += serialize_tlv(data + data_len, cipher_tlv);
 
         hmac(mac, data, data_len);
-        
+
         // If inc_mac is true, intentionally corrupt the MAC for testing
         if (inc_mac)
         {
             mac[0] ^= 0xFF;
         }
-        
+
         add_val(mac_tlv, mac, MAC_SIZE);
 
         tlv *data_tlv = create_tlv(DATA);
@@ -339,7 +339,8 @@ void output_sec(uint8_t *in_buf, size_t in_len)
         enforce_lifetime_valid(lifetime);
 
         // Check 2: DNS name match
-        if (hostname == NULL || dns->length != strlen(hostname) || memcmp(dns->val, hostname, dns->length) != 0){
+        if (hostname == NULL || dns->length != strlen(hostname) + 1 || memcmp(dns->val, hostname, dns->length) != 0)
+        {
             exit(2);
         }
 
@@ -377,6 +378,8 @@ void output_sec(uint8_t *in_buf, size_t in_len)
             exit(3);
         }
 
+        load_peer_public_key(pub_key->val, pub_key->length);
+
         derive_secret();
         uint8_t salt[64];
         memcpy(salt, client_nonce, NONCE_SIZE);
@@ -391,7 +394,8 @@ void output_sec(uint8_t *in_buf, size_t in_len)
         // TODO: parse DATA, verify MAC before decrypting, then output plaintext.
         // Required exit code: bad MAC(5), malformed(6).
         tlv *data_tlv = deserialize_tlv(in_buf, in_len);
-        if(!data_tlv){
+        if (!data_tlv)
+        {
             exit(6);
         }
 
