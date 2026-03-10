@@ -437,7 +437,6 @@ void output_sec(uint8_t *in_buf, size_t in_len)
         break;
     }
     default:
-        // TODO: handle unexpected states.
-        break;
+        exit(6);
     }
 }
